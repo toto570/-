@@ -1,238 +1,298 @@
-# -<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Crossy Road Clone</title>
+    <title>Crossy Road Clone</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Simple Crossy Road Clone</h1>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
-    <div id="score">Score: 0</div>
+    <h1>Crossy Road Clone</h1>
+    <div class="score-container">
+        <p>SCORE: <span id="score">0</span></p>
+        <p>HIGH SCORE: <span id="highScore">0</span></p>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="gameOverScreen" class="hidden">
+        <h2>GAME OVER</h2>
+        <button id="restartButton">RESTART</button>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>
 body {
-    font-family: Arial, sans-serif;
+    background-color: #f0f0f0;
+    font-family: 'Helvetica', sans-serif;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
     margin: 0;
-    background-color: #f0f0f0;
+    color: #333;
+}
+
+h1 {
+    margin-bottom: 10px;
+}
+
+.score-container {
+    display: flex;
+    gap: 20px;
+    font-size: 1.2em;
+    font-weight: bold;
 }
 
 canvas {
-    border: 2px solid #333;
-    background-color: #87CEEB; /* 空の色 */
+    background-color: #ffffff;
+    border: 3px solid #333;
+    box-shadow: 5px 5px 10px rgba(0, 0, 0, 0.2);
 }
 
-#score {
-    margin-top: 10px;
-    font-size: 1.5em;
-    font-weight: bold;
+#gameOverScreen {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 30px 50px;
+    border-radius: 10px;
+    text-align: center;
 }
+
+#gameOverScreen h2 {
+    margin-top: 0;
+}
+
+#restartButton {
+    padding: 10px 20px;
+    font-size: 1em;
+    cursor: pointer;
+    border: none;
+    border-radius: 5px;
+    background-color: #4CAF50;
+    color: white;
+}
+
+.hidden {
+    display: none;
+}
+// --- DOM要素の取得 ---
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-const scoreDisplay = document.getElementById('score');
+const scoreEl = document.getElementById('score');
+const highScoreEl = document.getElementById('highScore');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const restartButton = document.getElementById('restartButton');
 
-// ゲーム設定
-const tileSize = 50; // タイルのサイズ
-const playerSize = 40; // プレイヤーのサイズ
-const numLanes = canvas.height / tileSize; // レーンの数
+// --- 定数 ---
+const GRID_SIZE = 50; // 1マスのサイズ
+const LANES_COUNT = 14; // 画面内に表示するレーン数
+const CAR_SPEED_MIN = 1;
+const CAR_SPEED_MAX = 3;
 
-let score = 0;
+// --- キャンバスサイズ設定 ---
+canvas.width = GRID_SIZE * 9;
+canvas.height = GRID_SIZE * LANES_COUNT;
+
+// --- ゲームの状態管理 ---
+let player, lanes, score, highScore, gameActive;
 
 // プレイヤーオブジェクト
-const player = {
-    x: canvas.width / 2 - playerSize / 2,
-    y: canvas.height - tileSize * 2, // 画面下から2番目のレーン
-    width: playerSize,
-    height: playerSize,
-    color: 'green',
-    speed: tileSize // プレイヤーの移動速度 (1タイル分)
+const playerModel = {
+    x: 0,
+    y: 0,
+    width: GRID_SIZE * 0.7,
+    height: GRID_SIZE * 0.7,
+    color: '#3498db',
+    reset() {
+        this.x = Math.floor(canvas.width / 2 - this.width / 2);
+        this.y = canvas.height - GRID_SIZE;
+    },
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+    },
+    move(dx, dy) {
+        if (!gameActive) return;
+        const nextX = this.x + dx * GRID_SIZE;
+        const nextY = this.y + dy * GRID_SIZE;
+
+        // 画面外に出ないようにする
+        if (nextX >= 0 && nextX <= canvas.width - this.width) {
+            this.x = nextX;
+        }
+
+        // 前進した場合
+        if (dy < 0) {
+            // 新しいレーンに進んだらスコアアップ
+            if (nextY < this.y) {
+                score++;
+                // 新しいレーンを生成
+                lanes.pop();
+                lanes.unshift(generateLane(lanes[0].y - GRID_SIZE));
+            }
+            this.y = nextY;
+        } else if (nextY < canvas.height - GRID_SIZE) { // 後退
+             this.y = nextY;
+        }
+
+        updateScore();
+    }
 };
 
-// レーンの定義
-// 各レーンには障害物（車や丸太など）が含まれる
-let lanes = [];
+// 車クラス
+class Car {
+    constructor(y, speed, color) {
+        this.width = GRID_SIZE * (1.5 + Math.random());
+        this.height = GRID_SIZE * 0.8;
+        this.y = y + (GRID_SIZE - this.height) / 2;
+        this.speed = speed;
+        this.color = color;
+        this.x = speed > 0 ? -this.width : canvas.width;
+    }
 
-// レーンの種類と障害物の色
-const laneTypes = {
-    road: { color: '#888', obstacleColor: 'red', speed: 3 }, // 車が流れる道
-    grass: { color: '#4CAF50' }, // 安全な草地
-    water: { color: '#00BFFF', obstacleColor: 'brown', speed: 2 } // 丸太が流れる水面
-};
+    update() {
+        this.x += this.speed;
+        // 画面外に出たら反対側から再登場
+        if (this.speed > 0 && this.x > canvas.width) {
+            this.x = -this.width;
+        } else if (this.speed < 0 && this.x < -this.width) {
+            this.x = canvas.width;
+        }
+    }
 
-// ゲーム初期化時にレーンを生成
-function initLanes() {
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+    }
+}
+
+// --- ゲームの初期化 ---
+function init() {
+    gameActive = true;
+    score = 0;
+    highScore = localStorage.getItem('crossyHighScore') || 0;
+    gameOverScreen.classList.add('hidden');
+
+    player = Object.create(playerModel);
+    player.reset();
+
     lanes = [];
-    // 最下層は草地
-    lanes.push({ type: 'grass', y: canvas.height - tileSize });
-    lanes.push({ type: 'grass', y: canvas.height - tileSize * 2 }); // プレイヤー初期位置
-
-    for (let i = 2; i < numLanes; i++) {
-        const randomType = Math.random();
-        let type;
-        if (randomType < 0.5) {
-            type = 'road';
-        } else if (randomType < 0.7) {
-            type = 'water';
-        } else {
-            type = 'grass';
-        }
-
-        const lane = {
-            type: type,
-            y: canvas.height - tileSize * (i + 1),
-            obstacles: []
-        };
-
-        // 障害物を生成
-        if (type === 'road' || type === 'water') {
-            const numObstacles = Math.floor(Math.random() * 3) + 1; // 1〜3個の障害物
-            for (let j = 0; j < numObstacles; j++) {
-                lane.obstacles.push({
-                    x: Math.random() * canvas.width,
-                    width: tileSize * (Math.random() * 2 + 1), // 1〜3タイル分の幅
-                    height: tileSize * 0.8,
-                    speed: (Math.random() < 0.5 ? 1 : -1) * laneTypes[type].speed // 左右どちらかに動く
-                });
-            }
-        }
-        lanes.push(lane);
+    // 初期レーン生成
+    for (let i = 0; i < LANES_COUNT + 2; i++) {
+        lanes.push(generateLane(canvas.height - (i + 1) * GRID_SIZE));
     }
+    
+    updateScore();
+    gameLoop();
 }
 
-// 描画関数
-function draw() {
-    // キャンバスをクリア
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+// --- レーン生成 ---
+function generateLane(y) {
+    const type = Math.random() > 0.4 ? 'road' : 'grass';
+    const lane = { y, type, cars: [] };
 
-    // レーンを描画
-    lanes.forEach(lane => {
-        ctx.fillStyle = laneTypes[lane.type].color;
-        ctx.fillRect(0, lane.y, canvas.width, tileSize);
-
-        // 障害物を描画
-        lane.obstacles.forEach(obstacle => {
-            ctx.fillStyle = laneTypes[lane.type].obstacleColor;
-            ctx.fillRect(obstacle.x, lane.y + (tileSize - obstacle.height) / 2, obstacle.width, obstacle.height);
-        });
-    });
-
-    // プレイヤーを描画
-    ctx.fillStyle = player.color;
-    ctx.fillRect(player.x, player.y, player.width, player.height);
-}
-
-// 更新関数 (ゲームロジック)
-function update() {
-    // 障害物の移動
-    lanes.forEach(lane => {
-        if (lane.type === 'road' || lane.type === 'water') {
-            lane.obstacles.forEach(obstacle => {
-                obstacle.x += obstacle.speed;
-
-                // 画面外に出たら反対側から出現
-                if (obstacle.speed > 0 && obstacle.x > canvas.width) {
-                    obstacle.x = -obstacle.width;
-                } else if (obstacle.speed < 0 && obstacle.x + obstacle.width < 0) {
-                    obstacle.x = canvas.width;
-                }
-            });
+    if (type === 'road') {
+        const speed = (Math.random() * (CAR_SPEED_MAX - CAR_SPEED_MIN) + CAR_SPEED_MIN) * (Math.random() > 0.5 ? 1 : -1);
+        const carCount = Math.floor(Math.random() * 2) + 1;
+        const carColor = `hsl(${Math.random() * 360}, 80%, 50%)`;
+        for(let i=0; i < carCount; i++){
+            const car = new Car(y, speed, carColor);
+            car.x += i * (canvas.width / carCount) * 1.5; // 車が重ならないように初期位置をずらす
+            lane.cars.push(car);
         }
-    });
+    }
+    return lane;
+}
 
-    // 衝突判定
-    const currentPlayerLaneIndex = Math.floor((canvas.height - player.y - player.height / 2) / tileSize);
-    const currentPlayerLane = lanes[currentPlayerLaneIndex];
+// --- スコア更新 ---
+function updateScore() {
+    scoreEl.textContent = score;
+    highScoreEl.textContent = highScore;
+}
 
-    if (currentPlayerLane) {
-        if (currentPlayerLane.type === 'road') {
-            currentPlayerLane.obstacles.forEach(obstacle => {
-                if (
-                    player.x < obstacle.x + obstacle.width &&
-                    player.x + player.width > obstacle.x &&
-                    player.y < obstacle.y + obstacle.height && // このY座標の比較は正確ではないので注意 (後述)
-                    player.y + player.height > obstacle.y
-                ) {
-                    // 衝突した場合、ゲームオーバー
-                    alert('ゲームオーバー！ スコア: ' + score);
-                    resetGame();
-                }
-            });
-        } else if (currentPlayerLane.type === 'water') {
-            let onLog = false;
-            currentPlayerLane.obstacles.forEach(obstacle => {
-                if (
-                    player.x < obstacle.x + obstacle.width &&
-                    player.x + player.width > obstacle.x
-                ) {
-                    // 丸太に乗っている場合、一緒に移動
-                    player.x += obstacle.speed;
-                    onLog = true;
-                }
-            });
-            if (!onLog) {
-                // 水に落ちた場合、ゲームオーバー
-                alert('ゲームオーバー！ スコア: ' + score);
-                resetGame();
+// --- 衝突判定 ---
+function checkCollisions() {
+    const playerLane = lanes.find(lane => player.y >= lane.y && player.y < lane.y + GRID_SIZE);
+
+    if (playerLane && playerLane.type === 'road') {
+        for (const car of playerLane.cars) {
+            if (player.x < car.x + car.width &&
+                player.x + player.width > car.x &&
+                player.y < car.y + car.height &&
+                player.y + player.height > car.y) {
+                gameOver();
+                return;
             }
         }
     }
-
-
-    // スコアの更新 (上に進むごとにスコアが増える)
-    // 実際にはプレイヤーが画面上部に到達するごとに新しいレーンを生成し、スコアを増やす
-    // 今回は簡易的に、上に移動するごとにスコアを加算
-    // プレイヤーが特定のY座標を超えたら新しいレーンを生成し、古いレーンを削除するロジックが必要
-    // ここでは単純化のため、スコア表示のみ更新
-    scoreDisplay.textContent = 'Score: ' + score;
 }
 
-// キーボード入力イベント
-document.addEventListener('keydown', (e) => {
-    switch (e.key) {
+// --- ゲームオーバー処理 ---
+function gameOver() {
+    gameActive = false;
+    if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('crossyHighScore', highScore);
+    }
+    gameOverScreen.classList.remove('hidden');
+}
+
+
+// --- ゲームループ ---
+function gameLoop() {
+    if (!gameActive) return;
+
+    // 更新処理
+    lanes.forEach(lane => lane.cars.forEach(car => car.update()));
+    checkCollisions();
+
+    // 描画処理
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // 画面をクリア
+
+    // レーン描画
+    const yOffset = player.y - (canvas.height - GRID_SIZE * 3);
+    ctx.save();
+    ctx.translate(0, -yOffset); // カメラをプレイヤーに追従させる
+
+    lanes.forEach(lane => {
+        ctx.fillStyle = lane.type === 'road' ? '#444' : '#5cb85c';
+        ctx.fillRect(0, lane.y, canvas.width, GRID_SIZE);
+        lane.cars.forEach(car => car.draw());
+    });
+
+    player.draw();
+
+    ctx.restore();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// --- イベントリスナー ---
+window.addEventListener('keydown', (e) => {
+    switch(e.key) {
         case 'ArrowUp':
-            player.y -= player.speed;
-            score++; // 上に進むとスコアアップ
+        case 'w':
+            player.move(0, -1);
             break;
         case 'ArrowDown':
-            player.y += player.speed;
+        case 's':
+            player.move(0, 1);
             break;
         case 'ArrowLeft':
-            player.x -= player.speed;
+        case 'a':
+            player.move(-1, 0);
             break;
         case 'ArrowRight':
-            player.x += player.speed;
+        case 'd':
+            player.move(1, 0);
             break;
     }
-
-    // プレイヤーが画面外に出ないように制限
-    if (player.x < 0) player.x = 0;
-    if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
-    if (player.y < 0) player.y = 0;
-    if (player.y + player.height > canvas.height) player.y = canvas.height - player.height;
 });
 
-// ゲームのリセット
-function resetGame() {
-    score = 0;
-    player.x = canvas.width / 2 - playerSize / 2;
-    player.y = canvas.height - tileSize * 2;
-    initLanes(); // レーンを再生成
-}
+restartButton.addEventListener('click', init);
 
-// ゲームループ
-function gameLoop() {
-    update();
-    draw();
-    requestAnimationFrame(gameLoop); // フレームごとに繰り返し呼び出す
-}
-
-// ゲーム開始
-initLanes();
-gameLoop();
+// --- ゲーム開始 ---
+init();
